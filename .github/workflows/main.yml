@@ -119,6 +119,69 @@ jobs:
         shell: cmd
         run: SandboxiePlus\qmake_plus.cmd x64 build_qt6
 
+      - name: Locate Sandboxie Plus binaries
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          Write-Host 'Searching for SandMan.exe...'
+
+          $candidates = @(
+            'SandboxiePlus\Bin\x64\Release\SandMan.exe',
+            'SandboxiePlus\bin\x64\Release\SandMan.exe',
+            'SandboxiePlus\Bin\x64\release\SandMan.exe',
+            'SandboxiePlus\bin\x64\release\SandMan.exe',
+            'SandboxiePlus\SandMan\x64\Release\SandMan.exe'
+          )
+
+          $sandman = $null
+          foreach ($candidate in $candidates) {
+            if (Test-Path $candidate) {
+              $sandman = (Resolve-Path $candidate).Path
+              break
+            }
+          }
+
+          if (-not $sandman) {
+            $found = Get-ChildItem -Path SandboxiePlus -Filter SandMan.exe -Recurse -File -ErrorAction SilentlyContinue
+            if ($found) {
+              $sandman = $found[0].FullName
+            }
+          }
+
+          if (-not $sandman) {
+            Write-Host 'SandMan.exe was not found. SandboxiePlus directory:'
+            Get-ChildItem SandboxiePlus -Recurse -File -ErrorAction SilentlyContinue |
+              Select-Object -First 300 FullName
+            throw 'SandMan.exe was not produced by the Sandboxie Plus build.'
+          }
+
+          Write-Host "Found SandMan.exe: $sandman"
+          "SANDBOXIE_SANDMAN=$sandman" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8
+
+      - name: Prepare Sandboxie Plus output
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          $destination = Join-Path $PWD 'Installer\SbiePlus_x64'
+          New-Item -ItemType Directory -Force -Path $destination | Out-Null
+
+          $sandman = $env:SANDBOXIE_SANDMAN
+          if (-not (Test-Path $sandman)) {
+            throw "SandMan.exe disappeared: $sandman"
+          }
+
+          Copy-Item $sandman (Join-Path $destination 'SandMan.exe') -Force
+          Write-Host "Copied SandMan.exe to $destination"
+
+          # Keep the original repository packaging step as the primary
+          # packaging mechanism; this only guarantees that the main GUI
+          # executable exists at the expected artifact location.
+          Write-Host 'Installer output before copy_build:'
+          Get-ChildItem $destination -File -ErrorAction SilentlyContinue |
+            Select-Object Name, Length
+
       - name: Build SbieShell
         shell: cmd
         run: msbuild /t:restore,build -p:RestorePackagesConfig=true SandboxiePlus\SbieShell\SbieShell.sln /p:Configuration=Release /p:Platform=x64
@@ -145,11 +208,21 @@ jobs:
             'Installer\SbiePlus_x64\SbieSvc.exe'
           )
 
+          $missing = @()
           foreach ($file in $required) {
             if (-not (Test-Path $file)) {
-              throw "Missing build output: $file"
+              $missing += $file
             }
           }
+
+          if ($missing.Count -gt 0) {
+            Write-Host 'Installer output directory:'
+            Get-ChildItem 'Installer\SbiePlus_x64' -Recurse -File -ErrorAction SilentlyContinue |
+              Select-Object FullName, Length
+            throw "Missing build output: $($missing -join ', ')"
+          }
+
+          Write-Host 'All required build outputs are present.'
 
       - name: Upload x64 build
         uses: actions/upload-artifact@v7
