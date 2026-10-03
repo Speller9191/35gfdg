@@ -14,7 +14,7 @@ jobs:
   build-x64:
     name: Build x64
     runs-on: windows-2022
-    timeout-minutes: 90
+    timeout-minutes: 120
 
     steps:
       - name: Checkout
@@ -23,33 +23,82 @@ jobs:
       - name: Setup MSBuild
         uses: microsoft/setup-msbuild@v3
 
-      - name: Ensure VS 2019 (v142) C++ components
+      # windows-2022 has Visual Studio 2022, but some v142 libraries used by
+      # SbieShell are not installed by default. GitHub's runner-images issue
+      # tracker documents that the VS installer sometimes needs to be invoked
+      # twice for these components.
+      - name: Install missing VS v142 components
         shell: powershell
         run: |
-          $installer = "C:\Program Files (x86)\Microsoft Visual Studio\Installer\vs_installer.exe"
-          $vs = & "C:\Program Files (x86)\Microsoft Visual Studio\Installer\vswhere.exe" `
-            -latest -products * -requires Microsoft.Component.MSBuild -property installationPath
-          if (-not $vs) {
-            throw "Visual Studio 2022 installation was not found."
+          $ErrorActionPreference = 'Stop'
+
+          $installer = 'C:\Program Files (x86)\Microsoft Visual Studio\Installer\vs_installer.exe'
+          $vswhere = 'C:\Program Files (x86)\Microsoft Visual Studio\Installer\vswhere.exe'
+
+          if (-not (Test-Path $installer)) {
+            throw "Visual Studio Installer was not found: $installer"
           }
+
+          $vs = & $vswhere -latest -products * -requires Microsoft.Component.MSBuild -property installationPath
+          if (-not $vs) {
+            throw "Could not find a Visual Studio installation."
+          }
+
+          Write-Host "Visual Studio installation: $vs"
 
           $components = @(
-            "Microsoft.VisualStudio.Component.VC.14.29.16.11.x86.x64",
-            "Microsoft.VisualStudio.Component.VC.14.29.16.11.ATL",
-            "Microsoft.VisualStudio.Component.VC.14.29.16.11.MFC",
-            "Microsoft.VisualStudio.Component.VC.14.29.16.11.CLI.Support"
+            'Microsoft.VisualStudio.Component.VC.14.29.16.11.x86.x64',
+            'Microsoft.VisualStudio.Component.VC.14.29.16.11.ATL',
+            'Microsoft.VisualStudio.Component.VC.14.29.16.11.MFC',
+            'Microsoft.VisualStudio.Component.VC.14.29.16.11.CLI.Support'
           )
 
-          $args = @("modify", "--installPath", $vs)
-          foreach ($component in $components) {
-            $args += @("--add", $component)
-          }
-          $args += @("--quiet", "--norestart", "--nocache")
+          $arguments = @(
+            'modify',
+            '--installPath', $vs
+          )
 
-          $p = Start-Process -FilePath $installer -ArgumentList $args -Wait -PassThru
-          if ($p.ExitCode -ne 0) {
-            throw "Visual Studio component installation failed with exit code $($p.ExitCode)."
+          foreach ($component in $components) {
+            $arguments += '--add'
+            $arguments += $component
           }
+
+          $arguments += '--quiet'
+          $arguments += '--norestart'
+          $arguments += '--nocache'
+
+          Write-Host "Installing v142 components..."
+          Write-Host "$installer $($arguments -join ' ')"
+
+          # The VS installer on hosted runners has been observed to return
+          # exit code 1 on the first invocation while the components are still
+          # being staged. Invoking the same command a second time completes it.
+          $exitCodes = @()
+          for ($i = 1; $i -le 2; $i++) {
+            Write-Host "VS Installer pass $i/2"
+            $p = Start-Process -FilePath $installer `
+              -ArgumentList $arguments `
+              -Wait -PassThru -WindowStyle Hidden
+            $exitCodes += $p.ExitCode
+            Write-Host "VS Installer exit code: $($p.ExitCode)"
+          }
+
+          if (($exitCodes | Where-Object { $_ -eq 0 }).Count -eq 0) {
+            throw "Visual Studio component installation failed. Exit codes: $($exitCodes -join ', ')"
+          }
+
+      - name: Verify v142 toolset
+        shell: powershell
+        run: |
+          $vcRoot = 'C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Tools\MSVC'
+          $toolsets = Get-ChildItem $vcRoot -Directory -ErrorAction SilentlyContinue |
+            Where-Object { $_.Name -like '14.29.*' }
+
+          if (-not $toolsets) {
+            throw "MSVC v142 (14.29.x) was not found under $vcRoot"
+          }
+
+          $toolsets | ForEach-Object { Write-Host "Found v142: $($_.FullName)" }
 
       - name: Load build variables
         shell: cmd
@@ -58,8 +107,6 @@ jobs:
           echo qt_version=%qt_version%>>%GITHUB_ENV%
           echo qt6_version=%qt6_version%>>%GITHUB_ENV%
 
-      # Sandboxie Classic core. The WDK and Windows SDK are provided by
-      # the windows-2022 GitHub Actions image.
       - name: Build Sandboxie x86
         shell: cmd
         run: msbuild /t:build Sandboxie\SandboxDll.sln /p:Configuration=SbieRelease /p:Platform=Win32 -maxcpucount:8
@@ -75,14 +122,6 @@ jobs:
       - name: Install Qt
         shell: cmd
         run: SandboxiePlus\install_qt.cmd x64
-
-      - name: Cache jom
-        uses: actions/cache@v4
-        with:
-          path: jom_1_1_4.zip
-          key: jom-1.1.4-windows
-          restore-keys: |
-            jom-1.1.4-
 
       - name: Install jom
         shell: cmd
@@ -112,11 +151,12 @@ jobs:
         shell: powershell
         run: |
           $required = @(
-            "Installer\SbiePlus_x64\SandMan.exe",
-            "Installer\SbiePlus_x64\SbieDrv.sys",
-            "Installer\SbiePlus_x64\SbieDll.dll",
-            "Installer\SbiePlus_x64\SbieSvc.exe"
+            'Installer\SbiePlus_x64\SandMan.exe',
+            'Installer\SbiePlus_x64\SbieDrv.sys',
+            'Installer\SbiePlus_x64\SbieDll.dll',
+            'Installer\SbiePlus_x64\SbieSvc.exe'
           )
+
           foreach ($file in $required) {
             if (-not (Test-Path $file)) {
               throw "Missing build output: $file"
