@@ -23,82 +23,70 @@ jobs:
       - name: Setup MSBuild
         uses: microsoft/setup-msbuild@v3
 
-      # windows-2022 has Visual Studio 2022, but some v142 libraries used by
-      # SbieShell are not installed by default. GitHub's runner-images issue
-      # tracker documents that the VS installer sometimes needs to be invoked
-      # twice for these components.
-      - name: Install missing VS v142 components
+      - name: Install/verify MSVC v142
         shell: powershell
         run: |
           $ErrorActionPreference = 'Stop'
 
           $installer = 'C:\Program Files (x86)\Microsoft Visual Studio\Installer\vs_installer.exe'
-          $vswhere = 'C:\Program Files (x86)\Microsoft Visual Studio\Installer\vswhere.exe'
-
-          if (-not (Test-Path $installer)) {
-            throw "Visual Studio Installer was not found: $installer"
-          }
+          $vswhere  = 'C:\Program Files (x86)\Microsoft Visual Studio\Installer\vswhere.exe'
 
           $vs = & $vswhere -latest -products * -requires Microsoft.Component.MSBuild -property installationPath
           if (-not $vs) {
-            throw "Could not find a Visual Studio installation."
+            throw 'Visual Studio installation was not found.'
           }
 
-          Write-Host "Visual Studio installation: $vs"
+          Write-Host "Visual Studio: $vs"
 
-          $components = @(
-            'Microsoft.VisualStudio.Component.VC.14.29.16.11.x86.x64',
-            'Microsoft.VisualStudio.Component.VC.14.29.16.11.ATL',
-            'Microsoft.VisualStudio.Component.VC.14.29.16.11.MFC',
-            'Microsoft.VisualStudio.Component.VC.14.29.16.11.CLI.Support'
-          )
-
-          $arguments = @(
-            'modify',
-            '--installPath', $vs
-          )
-
-          foreach ($component in $components) {
-            $arguments += '--add'
-            $arguments += $component
-          }
-
-          $arguments += '--quiet'
-          $arguments += '--norestart'
-          $arguments += '--nocache'
-
-          Write-Host "Installing v142 components..."
-          Write-Host "$installer $($arguments -join ' ')"
-
-          # The VS installer on hosted runners has been observed to return
-          # exit code 1 on the first invocation while the components are still
-          # being staged. Invoking the same command a second time completes it.
-          $exitCodes = @()
-          for ($i = 1; $i -le 2; $i++) {
-            Write-Host "VS Installer pass $i/2"
-            $p = Start-Process -FilePath $installer `
-              -ArgumentList $arguments `
-              -Wait -PassThru -WindowStyle Hidden
-            $exitCodes += $p.ExitCode
-            Write-Host "VS Installer exit code: $($p.ExitCode)"
-          }
-
-          if (($exitCodes | Where-Object { $_ -eq 0 }).Count -eq 0) {
-            throw "Visual Studio component installation failed. Exit codes: $($exitCodes -join ', ')"
-          }
-
-      - name: Verify v142 toolset
-        shell: powershell
-        run: |
-          $vcRoot = 'C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Tools\MSVC'
-          $toolsets = Get-ChildItem $vcRoot -Directory -ErrorAction SilentlyContinue |
+          # GitHub's windows-2022 image contains the v142 component package,
+          # but does not necessarily install it. The component group is the
+          # supported way to add the complete x86/x64 v142 toolset.
+          $v142 = Get-ChildItem "$vs\VC\Tools\MSVC" -Directory -ErrorAction SilentlyContinue |
             Where-Object { $_.Name -like '14.29.*' }
 
-          if (-not $toolsets) {
-            throw "MSVC v142 (14.29.x) was not found under $vcRoot"
+          if ($v142) {
+            Write-Host "v142 is already installed:"
+            $v142 | ForEach-Object { Write-Host $_.FullName }
+          } else {
+            $log = "$env:RUNNER_TEMP\vs-v142-install.log"
+
+            $args = @(
+              'modify',
+              '--installPath', $vs,
+              '--add', 'Microsoft.VisualStudio.ComponentGroup.VC.Tools.142.x86.x64',
+              '--add', 'Microsoft.VisualStudio.Component.VC.14.29.16.11.ATL',
+              '--add', 'Microsoft.VisualStudio.Component.VC.14.29.16.11.MFC',
+              '--add', 'Microsoft.VisualStudio.Component.VC.14.29.16.11.CLI.Support',
+              '--quiet',
+              '--norestart',
+              '--nocache',
+              '--log', $log
+            )
+
+            Write-Host 'Installing MSVC v142...'
+            $p = Start-Process -FilePath $installer -ArgumentList $args -Wait -PassThru
+            Write-Host "VS Installer exit code: $($p.ExitCode)"
+
+            if ($p.ExitCode -ne 0) {
+              if (Test-Path $log) {
+                Write-Host '--- Visual Studio Installer log ---'
+                Get-Content $log -Tail 200
+              }
+              throw "Visual Studio v142 installation failed with exit code $($p.ExitCode)."
+            }
           }
 
-          $toolsets | ForEach-Object { Write-Host "Found v142: $($_.FullName)" }
+          # Verify after installation. Do not rely on the installer exit code alone.
+          $v142 = Get-ChildItem "$vs\VC\Tools\MSVC" -Directory -ErrorAction SilentlyContinue |
+            Where-Object { $_.Name -like '14.29.*' }
+
+          if (-not $v142) {
+            throw "MSVC v142 was not found in $vs\VC\Tools\MSVC after installation."
+          }
+
+          $v142 | ForEach-Object {
+            Write-Host "Confirmed v142: $($_.FullName)"
+          }
 
       - name: Load build variables
         shell: cmd
