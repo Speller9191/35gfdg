@@ -378,3 +378,12 @@ SandboxiePlus/Build_*
 !Sandboxie/common/NtCRT/x86/ntdll.def
 !Sandboxie/common/NtCRT/x64/
 !Sandboxie/common/NtCRT/x64/ntdll.def
+
+# NtCRT contains prebuilt objects required by SboxDll.vcxproj.
+!Sandboxie/common/NtCRT/
+!Sandboxie/common/NtCRT/x86/
+!Sandboxie/common/NtCRT/x86/ntdll/
+!Sandboxie/common/NtCRT/x86/ntdll/*.obj
+!Sandboxie/common/NtCRT/x86/ntdll.def
+!Sandboxie/common/NtCRT/x64/
+!Sandboxie/common/NtCRT/x64/ntdll.def
