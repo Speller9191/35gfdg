@@ -1,0 +1,132 @@
+name: Build Sandboxie Plus
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - "**"
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  build-x64:
+    name: Build x64
+    runs-on: windows-2022
+    timeout-minutes: 90
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup MSBuild
+        uses: microsoft/setup-msbuild@v3
+
+      - name: Ensure VS 2019 (v142) C++ components
+        shell: powershell
+        run: |
+          $installer = "C:\Program Files (x86)\Microsoft Visual Studio\Installer\vs_installer.exe"
+          $vs = & "C:\Program Files (x86)\Microsoft Visual Studio\Installer\vswhere.exe" `
+            -latest -products * -requires Microsoft.Component.MSBuild -property installationPath
+          if (-not $vs) {
+            throw "Visual Studio 2022 installation was not found."
+          }
+
+          $components = @(
+            "Microsoft.VisualStudio.Component.VC.14.29.16.11.x86.x64",
+            "Microsoft.VisualStudio.Component.VC.14.29.16.11.ATL",
+            "Microsoft.VisualStudio.Component.VC.14.29.16.11.MFC",
+            "Microsoft.VisualStudio.Component.VC.14.29.16.11.CLI.Support"
+          )
+
+          $args = @("modify", "--installPath", $vs)
+          foreach ($component in $components) {
+            $args += @("--add", $component)
+          }
+          $args += @("--quiet", "--norestart", "--nocache")
+
+          $p = Start-Process -FilePath $installer -ArgumentList $args -Wait -PassThru
+          if ($p.ExitCode -ne 0) {
+            throw "Visual Studio component installation failed with exit code $($p.ExitCode)."
+          }
+
+      - name: Load build variables
+        shell: cmd
+        run: |
+          call Installer\buildVariables.cmd build_qt6
+          echo qt_version=%qt_version%>>%GITHUB_ENV%
+          echo qt6_version=%qt6_version%>>%GITHUB_ENV%
+
+      # Sandboxie Classic core. The WDK and Windows SDK are provided by
+      # the windows-2022 GitHub Actions image.
+      - name: Build Sandboxie x86
+        shell: cmd
+        run: msbuild /t:build Sandboxie\SandboxDll.sln /p:Configuration=SbieRelease /p:Platform=Win32 -maxcpucount:8
+
+      - name: Build Sandboxie x64
+        shell: cmd
+        run: msbuild /t:build Sandboxie\Sandbox.sln /p:Configuration=SbieRelease /p:Platform=x64 -maxcpucount:8
+
+      - name: Build Sandboxie x64 driver
+        shell: cmd
+        run: msbuild /t:build Sandboxie\SandboxDrv.sln /p:Configuration=SbieRelease /p:Platform=x64 -maxcpucount:8
+
+      - name: Install Qt
+        shell: cmd
+        run: SandboxiePlus\install_qt.cmd x64
+
+      - name: Cache jom
+        uses: actions/cache@v4
+        with:
+          path: jom_1_1_4.zip
+          key: jom-1.1.4-windows
+          restore-keys: |
+            jom-1.1.4-
+
+      - name: Install jom
+        shell: cmd
+        run: SandboxiePlus\install_jom.cmd
+
+      - name: Build Sandboxie Plus
+        shell: cmd
+        run: SandboxiePlus\qmake_plus.cmd x64 build_qt6
+
+      - name: Build SbieShell
+        shell: cmd
+        run: msbuild /t:restore,build -p:RestorePackagesConfig=true SandboxiePlus\SbieShell\SbieShell.sln /p:Configuration=Release /p:Platform=x64
+
+      - name: Build Sandboxie Tools
+        shell: cmd
+        run: msbuild /t:build SandboxieTools\SandboxieTools.sln /p:Configuration=Release /p:Platform=x64 -maxcpucount:8
+
+      - name: Prepare runtime files
+        shell: cmd
+        run: |
+          Installer\fix_qt5_languages.cmd x64 build_qt6
+          Installer\get_openssl.cmd
+          Installer\get_7zip.cmd
+          Installer\copy_build.cmd x64 build_qt6
+
+      - name: Verify build output
+        shell: powershell
+        run: |
+          $required = @(
+            "Installer\SbiePlus_x64\SandMan.exe",
+            "Installer\SbiePlus_x64\SbieDrv.sys",
+            "Installer\SbiePlus_x64\SbieDll.dll",
+            "Installer\SbiePlus_x64\SbieSvc.exe"
+          )
+          foreach ($file in $required) {
+            if (-not (Test-Path $file)) {
+              throw "Missing build output: $file"
+            }
+          }
+
+      - name: Upload x64 build
+        uses: actions/upload-artifact@v7
+        with:
+          name: Sandboxie-Plus-x64
+          path: Installer\SbiePlus_x64
+          if-no-files-found: error
+          retention-days: 14

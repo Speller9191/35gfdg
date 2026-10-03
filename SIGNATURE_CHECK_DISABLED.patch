@@ -1,0 +1,44 @@
+--- /mnt/data/sbx_orig/Sandboxie-master/Sandboxie/common/verify.c	2026-10-03 15:36:14.487216087 +0000
++++ /mnt/data/sbx_work/Sandboxie-master/Sandboxie/common/verify.c	2026-10-03 15:36:03.919559579 +0000
+@@ -262,6 +262,12 @@
+ 
+ NTSTATUS VerifyFileSignature(const wchar_t* FilePath)
+ {
++    /*
++     * Local-build option: skip Sandboxie detached-signature verification.
++     * This intentionally disables integrity/authenticity checking for this
++     * user-mode verification path. The kernel driver is unchanged.
++     */
++    return STATUS_SUCCESS;
+     NTSTATUS status;
+     ULONG hashSize;
+     PVOID hash = NULL;
+
+--- /mnt/data/sbx_orig/Sandboxie-master/SandboxieTools/Common/verify.c	2026-10-03 15:36:14.613500392 +0000
++++ /mnt/data/sbx_work/Sandboxie-master/SandboxieTools/Common/verify.c	2026-10-03 15:36:03.919716731 +0000
+@@ -401,6 +401,12 @@
+ 
+ NTSTATUS VerifyFileSignatureImpl(const wchar_t* FilePath, PVOID Signature, ULONG SignatureSize)
+ {
++    /*
++     * Local-build option: skip Sandboxie detached-signature verification.
++     * This intentionally disables integrity/authenticity checking for this
++     * user-mode verification path. The kernel driver is unchanged.
++     */
++    return STATUS_SUCCESS;
+     NTSTATUS status;
+     ULONG hashSize;
+     PVOID hash = NULL;
+@@ -427,6 +433,12 @@
+ 
+ NTSTATUS VerifyFileSignature(const wchar_t* FilePath, const wchar_t* SigFile)
+ {
++    /*
++     * Local-build option: skip Sandboxie detached-signature verification.
++     * This intentionally disables integrity/authenticity checking for this
++     * user-mode verification path. The kernel driver is unchanged.
++     */
++    return STATUS_SUCCESS;
+     NTSTATUS status;
+     ULONG signatureSize;
+     PVOID signature = NULL;
