@@ -198,6 +198,66 @@ jobs:
           Installer\get_7zip.cmd
           Installer\copy_build.cmd x64 build_qt6
 
+
+      - name: Stage core Sandboxie binaries
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          $destination = Join-Path $env:GITHUB_WORKSPACE 'Installer\SbiePlus_x64'
+          New-Item -ItemType Directory -Force -Path $destination | Out-Null
+
+          $required = @(
+            'SbieDrv.sys',
+            'SbieDll.dll',
+            'SbieSvc.exe'
+          )
+
+          $sourceRoot = Join-Path $env:GITHUB_WORKSPACE 'Sandboxie\Bin\x64\SbieRelease'
+          Write-Host "Expected Sandboxie output directory: $sourceRoot"
+
+          if (Test-Path $sourceRoot) {
+            Write-Host 'Contents of the expected Sandboxie output directory:'
+            Get-ChildItem $sourceRoot -File -ErrorAction SilentlyContinue |
+              Select-Object Name, Length
+          } else {
+            Write-Host 'Expected Sandboxie output directory does not exist.'
+          }
+
+          foreach ($name in $required) {
+            $destinationFile = Join-Path $destination $name
+
+            if (Test-Path $destinationFile) {
+              Write-Host "Already staged: $name"
+              continue
+            }
+
+            $source = Join-Path $sourceRoot $name
+
+            if (-not (Test-Path $source)) {
+              Write-Host "Searching workspace for $name..."
+              $found = Get-ChildItem -Path $env:GITHUB_WORKSPACE -Filter $name -File -Recurse -ErrorAction SilentlyContinue |
+                Where-Object { $_.FullName -notlike '*\Installer\SbiePlus_x64\*' } |
+                Select-Object -First 1
+
+              if ($found) {
+                $source = $found.FullName
+              }
+            }
+
+            if (-not (Test-Path $source)) {
+              throw "Built Sandboxie binary was not found: $name"
+            }
+
+            Copy-Item $source $destinationFile -Force
+            Write-Host "Staged $name from $source"
+          }
+
+          Write-Host 'Final core Sandboxie files:'
+          Get-ChildItem $destination -File -ErrorAction SilentlyContinue |
+            Where-Object { $_.Name -in @('SandMan.exe','SbieDrv.sys','SbieDll.dll','SbieSvc.exe') } |
+            Select-Object Name, Length
+
       - name: Verify build output
         shell: powershell
         run: |
